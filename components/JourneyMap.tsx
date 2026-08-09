@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import { journeyLocations } from "@/lib/journeyData";
+import { createJourneyMarker } from "@/components/JourneyMarker";
 
 mapboxgl.accessToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? "";
 
@@ -66,12 +67,14 @@ export default function JourneyMap() {
         paint: {
           "line-color": "#292524",
           "line-width": 4,
-          "line-opacity": 0.8,
+          "line-opacity": 0.85,
         },
       });
 
       journeyLocations.forEach((location, index) => {
-        const marker = new mapboxgl.Marker()
+        const marker = new mapboxgl.Marker({
+          element: createJourneyMarker(index === 0),
+        })
           .setLngLat(location.coordinates)
           .setPopup(
             new mapboxgl.Popup({ offset: 25 }).setHTML(`
