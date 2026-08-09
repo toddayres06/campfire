@@ -1,4 +1,5 @@
 import Navigation from "@/components/Navigation";
+import JourneyMap from "@/components/JourneyMap";
 
 export default function Home() {
   return (
@@ -24,17 +25,8 @@ export default function Home() {
 
       <section className="px-5 pb-8">
         <div className="mx-auto max-w-5xl">
-          <div className="relative aspect-[16/10] overflow-hidden rounded-3xl bg-stone-800 shadow-xl">
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="text-center text-white">
-                <p className="text-sm font-medium tracking-widest text-stone-300 uppercase">
-                  Journey Map
-                </p>
-                <p className="mt-2 text-2xl font-semibold">
-                  Our route will live here.
-                </p>
-              </div>
-            </div>
+          <div className="relative aspect-[16/10] overflow-hidden rounded-3xl shadow-xl">
+            <JourneyMap />
           </div>
         </div>
       </section>
