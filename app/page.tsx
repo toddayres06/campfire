@@ -17,8 +17,8 @@ export default function Home() {
           </h1>
 
           <p className="mt-5 max-w-xl text-lg leading-8 text-stone-600">
-            A place to remember where we&apos;ve been, what we&apos;ve seen,
-            and the moments worth keeping.
+            A place to remember where we&apos;ve been, what we&apos;ve seen, and
+            the moments worth keeping.
           </p>
         </div>
       </section>
@@ -38,9 +38,7 @@ export default function Home() {
               Currently
             </p>
 
-            <h2 className="mt-2 text-2xl font-semibold">
-              📍 Galveston, Texas
-            </h2>
+            <h2 className="mt-2 text-2xl font-semibold">📍 Galveston, Texas</h2>
 
             <p className="mt-2 text-stone-600">
               Day 17 on the road · 1,284 miles traveled
