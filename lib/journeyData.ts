@@ -84,84 +84,79 @@ export interface Journey {
   legs: Leg[];
 }
 
-// --- Mock data migration: convert the previous flat journeyLocations into a single Journey with one Leg ---
+// --- Mock data: multiple legs connecting a list of destinations ---
 
-const legacyLocations = [
-  {
-    id: "houston",
-    name: "Houston",
-    state: "Texas",
-    coordinates: [-95.3698, 29.7604] as Coordinate,
-    date: "August 5, 2026",
-    description: "Where our journey began.",
-  },
-  {
-    id: "galveston",
-    name: "Galveston",
-    state: "Texas",
-    coordinates: [-94.7977, 29.3013] as Coordinate,
-    date: "August 7, 2026",
-    description: "Our first stop by the Gulf.",
-  },
-  {
-    id: "new-orleans",
-    name: "New Orleans",
-    state: "Louisiana",
-    coordinates: [-90.0715, 29.9511] as Coordinate,
-    date: "August 10, 2026",
-    description: "Next stop: New Orleans.",
-  },
-  {
-    id: "mobile",
-    name: "Mobile",
-    state: "Alabama",
-    coordinates: [-88.0399, 30.6954] as Coordinate,
-    date: "August 13, 2026",
-    description: "A stop along the Gulf Coast.",
-  },
-  {
-    id: "pensacola",
-    name: "Pensacola",
-    state: "Florida",
-    coordinates: [-87.2169, 30.4213] as Coordinate,
-    date: "August 16, 2026",
-    description: "Our easternmost stop so far.",
-  },
+const destinationList = [
+  { id: 'conroe', name: 'Conroe', state: 'Texas', coordinates: [-95.469, 30.3119], date: 'August 1, 2026', description: 'Conroe start' },
+  { id: 'houston', name: 'Houston', state: 'Texas', coordinates: [-95.3698, 29.7604], date: 'August 2, 2026', description: 'Houston' },
+  { id: 'galveston', name: 'Galveston', state: 'Texas', coordinates: [-94.7977, 29.3013], date: 'August 3, 2026', description: 'Galveston' },
+  { id: 'new-braunfels', name: 'New Braunfels', state: 'Texas', coordinates: [-98.1136, 29.7030], date: 'August 5, 2026', description: 'New Braunfels' },
+  { id: 'austin', name: 'Austin', state: 'Texas', coordinates: [-97.7431, 30.2672], date: 'August 6, 2026', description: 'Austin' },
+  { id: 'dallas', name: 'Dallas', state: 'Texas', coordinates: [-96.7970, 32.7767], date: 'August 8, 2026', description: 'Dallas' },
+  { id: 'texarkana', name: 'Texarkana', state: 'Texas', coordinates: [-94.1066, 33.4418], date: 'August 10, 2026', description: 'Texarkana' },
+  { id: 'little-rock', name: 'Little Rock', state: 'Arkansas', coordinates: [-92.2896, 34.7465], date: 'August 12, 2026', description: 'Little Rock' },
+  { id: 'memphis', name: 'Memphis', state: 'Tennessee', coordinates: [-90.0490, 35.1495], date: 'August 14, 2026', description: 'Memphis' },
+  { id: 'nashville', name: 'Nashville', state: 'Tennessee', coordinates: [-86.7816, 36.1627], date: 'August 16, 2026', description: 'Nashville' },
+  { id: 'knoxville', name: 'Knoxville', state: 'Tennessee', coordinates: [-83.9207, 35.9606], date: 'August 18, 2026', description: 'Knoxville' },
+  { id: 'roanoke', name: 'Roanoke', state: 'Virginia', coordinates: [-79.9414, 37.27097], date: 'August 20, 2026', description: 'Roanoke' },
+  { id: 'richmond', name: 'Richmond', state: 'Virginia', coordinates: [-77.4360, 37.5407], date: 'August 22, 2026', description: 'Richmond' },
 ];
 
-export const journey: Journey = {
-  id: "current-journey",
-  title: "Gulf Coast Trip",
-  description: "A short trip along the Gulf Coast.",
-  legs: [
-    {
-      id: "leg-1",
-      title: "Full trip",
-      color: "#292524",
-      route: {
-        type: "LineString",
-        coordinates: legacyLocations.map((l) => l.coordinates as Coordinate),
-      },
-      destinations: legacyLocations.map((l) => ({
-        id: l.id,
-        name: l.name,
-        state: l.state,
-        coordinates: l.coordinates as Coordinate,
-        date: l.date,
-        description: l.description,
-      } as Destination)),
-      moments: [],
+// helper to build leg ids
+const legId = (fromId: string, toId: string) => `leg-${fromId}-to-${toId}`;
+
+const legs: Leg[] = destinationList.slice(0, -1).map((start, idx) => {
+  const end = destinationList[idx + 1];
+  return {
+    id: legId(start.id, end.id),
+    title: `${start.name} → ${end.name}`,
+    startDate: start.date,
+    endDate: end.date,
+    color: idx % 2 === 0 ? '#292524' : '#78716c',
+    route: {
+      type: 'LineString',
+      coordinates: [start.coordinates as Coordinate, end.coordinates as Coordinate],
     },
-  ],
+    destinations: [
+      {
+        id: start.id,
+        name: start.name,
+        state: start.state,
+        coordinates: start.coordinates as Coordinate,
+        date: start.date,
+        description: start.description,
+      },
+      {
+        id: end.id,
+        name: end.name,
+        state: end.state,
+        coordinates: end.coordinates as Coordinate,
+        date: end.date,
+        description: end.description,
+      },
+    ],
+    moments: [],
+  } as Leg;
+});
+
+export const journey: Journey = {
+  id: 'current-journey',
+  title: 'Gulf & Southeast Route',
+  description: 'Mock journey broken into multiple legs',
+  legs,
 };
 
-// Backwards-compatible alias: keep journeyLocations shape for any existing imports while encouraging new code to use `journey`.
-const primaryLeg = journey.legs[0]!;
-export const journeyLocations = primaryLeg.destinations.map((d) => ({
+// Backwards-compatible alias: unique destinations in chronological order
+const seen = new Set<string>();
+export const journeyLocations = legs.flatMap((l) => l.destinations).filter((d) => {
+  if (seen.has(d.id)) return false;
+  seen.add(d.id);
+  return true;
+}).map((d) => ({
   id: d.id,
   name: d.name,
-  state: d.state ?? "",
+  state: d.state ?? '',
   coordinates: d.coordinates,
-  date: d.date ?? "",
-  description: d.description ?? "",
+  date: d.date ?? '',
+  description: d.description ?? '',
 }));
