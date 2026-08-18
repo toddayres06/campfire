@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import { journey } from "@/lib/journeyData";
+import type { Destination } from "@/lib/journeyData";
 import { createJourneyMarker } from "@/components/JourneyMarker";
 
 mapboxgl.accessToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? "";
@@ -127,8 +128,22 @@ export default function JourneyMap() {
   useEffect(() => {
     if (!mapContainer.current || map.current) return;
 
-    const primaryLeg = journey.legs[0]!;
-    const initialLocation = primaryLeg.destinations[0]!;
+    // Build a chronologically ordered list of unique destinations across all legs
+    const allDestinations = (() => {
+      const seen = new Set<string>();
+      const out: Destination[] = [];
+      for (const leg of journey.legs) {
+        for (const d of leg.destinations) {
+          if (!seen.has(d.id)) {
+            seen.add(d.id);
+            out.push(d);
+          }
+        }
+      }
+      return out;
+    })();
+
+    const initialLocation = allDestinations[0]!;
 
     map.current = new mapboxgl.Map({
       container: mapContainer.current,
@@ -147,7 +162,8 @@ export default function JourneyMap() {
 
       if (!currentMap) return;
 
-      const routeCoordinates = primaryLeg.route.coordinates;
+      // Build route coordinates from the deduplicated chronological destination list
+      const routeCoordinates = allDestinations.map(d => d.coordinates);
 
       currentMap.addSource("journey-route", {
         type: "geojson",
@@ -183,7 +199,7 @@ export default function JourneyMap() {
           properties: {},
           geometry: {
             type: "LineString",
-            coordinates: [routeCoordinates[0], routeCoordinates[0]],
+            coordinates: routeCoordinates.length > 0 ? [routeCoordinates[0], routeCoordinates[0]] : [],
           },
         },
       });
@@ -203,7 +219,8 @@ export default function JourneyMap() {
         },
       });
 
-      primaryLeg.destinations.forEach((location, index) => {
+      // create markers for the deduplicated destination list
+      allDestinations.forEach((location, index) => {
         const marker = new mapboxgl.Marker({
           element: createJourneyMarker(index === 0),
         })
@@ -233,7 +250,7 @@ export default function JourneyMap() {
 
       const bounds = new mapboxgl.LngLatBounds();
 
-      primaryLeg.destinations.forEach((location) => {
+      allDestinations.forEach((location) => {
         bounds.extend(location.coordinates);
       });
 
