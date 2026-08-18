@@ -3,7 +3,7 @@
 import { useEffect, useRef } from "react";
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
-import { journeyLocations } from "@/lib/journeyData";
+import { journey } from "@/lib/journeyData";
 import { createJourneyMarker } from "@/components/JourneyMarker";
 
 mapboxgl.accessToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? "";
@@ -127,7 +127,8 @@ export default function JourneyMap() {
   useEffect(() => {
     if (!mapContainer.current || map.current) return;
 
-    const initialLocation = journeyLocations[0];
+    const primaryLeg = journey.legs[0]!;
+    const initialLocation = primaryLeg.destinations[0]!;
 
     map.current = new mapboxgl.Map({
       container: mapContainer.current,
@@ -146,9 +147,7 @@ export default function JourneyMap() {
 
       if (!currentMap) return;
 
-      const routeCoordinates = journeyLocations.map(
-        (location) => location.coordinates,
-      );
+      const routeCoordinates = primaryLeg.route.coordinates;
 
       currentMap.addSource("journey-route", {
         type: "geojson",
@@ -204,7 +203,7 @@ export default function JourneyMap() {
         },
       });
 
-      journeyLocations.forEach((location, index) => {
+      primaryLeg.destinations.forEach((location, index) => {
         const marker = new mapboxgl.Marker({
           element: createJourneyMarker(index === 0),
         })
@@ -234,7 +233,7 @@ export default function JourneyMap() {
 
       const bounds = new mapboxgl.LngLatBounds();
 
-      journeyLocations.forEach((location) => {
+      primaryLeg.destinations.forEach((location) => {
         bounds.extend(location.coordinates);
       });
 
