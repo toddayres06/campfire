@@ -2,9 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import mapboxgl from "mapbox-gl";
+import type { Feature, LineString } from "geojson";
 import "mapbox-gl/dist/mapbox-gl.css";
-import { journey } from "@/lib/journeyData";
-import type { Destination } from "@/lib/journeyData";
+import { journey as exampleJourney } from "@/lib/journeyData";
+import type { Journey } from "@/lib/journeyData";
 import { createJourneyMarker } from "@/components/JourneyMarker";
 
 mapboxgl.accessToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? "";
@@ -120,86 +121,73 @@ const buildRevealedRoute = (
   };
 };
 
-export default function JourneyMap() {
+export default function JourneyMap({
+  trip = exampleJourney,
+  focusId,
+  onDestination,
+}: {
+  trip?: Journey;
+  focusId?: string;
+  onDestination?: (id: string) => void;
+}) {
   const mapContainer = useRef<HTMLDivElement | null>(null);
   const map = useRef<mapboxgl.Map | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const [selectedLegId, setSelectedLegId] = useState<string | null>(null);
+  const [ready, setReady] = useState(false);
+  const [error, setError] = useState("");
   const prevSelectedRef = useRef<string | null>(null);
-  const globalBoundsRef = useRef<[[number, number], [number, number]] | null>(null);
-  // handler refs for proper cleanup and diagnostics
-  const legClickRef = useRef<any>(null);
-  const mapClickRef = useRef<any>(null);
-  // current selected ref to allow handlers defined in load() to see latest selection
-  const currentSelectedRef = useRef<string | null>(null);
+  const callbacks = useRef(onDestination);
+  useEffect(() => {
+    callbacks.current = onDestination;
+  }, [onDestination]);
+  const destinations = [
+    ...new Map(
+      trip.legs.flatMap((l) => l.destinations).map((d) => [d.id, d]),
+    ).values(),
+  ];
+  const boundsFor = (coords: [number, number][]) =>
+    coords.reduce((b, c) => b.extend(c), new mapboxgl.LngLatBounds());
 
   useEffect(() => {
-    if (!mapContainer.current || map.current) return;
-
-    // Build a chronologically ordered list of unique destinations across all legs
-    const allDestinations = (() => {
-      const seen = new Set<string>();
-      const out: Destination[] = [];
-      for (const leg of journey.legs) {
-        for (const d of leg.destinations) {
-          if (!seen.has(d.id)) {
-            seen.add(d.id);
-            out.push(d);
-          }
-        }
-      }
-      return out;
-    })();
-
-    const initialLocation = allDestinations[0]!;
-
-    map.current = new mapboxgl.Map({
-      container: mapContainer.current,
-      style: "mapbox://styles/mapbox/standard",
-      center: initialLocation.coordinates,
-      zoom: 5,
+    if (!mapContainer.current || map.current || !trip.legs.length) return;
+    if (!mapboxgl.accessToken) return;
+    let disposed = false;
+    const all = [
+      ...new Map(
+        trip.legs.flatMap((l) => l.destinations).map((d) => [d.id, d]),
+      ).values(),
+    ];
+    let currentMap: mapboxgl.Map;
+    try {
+      currentMap = new mapboxgl.Map({
+        container: mapContainer.current,
+        style: "mapbox://styles/mapbox/standard",
+        center: all[0].coordinates,
+        zoom: 5,
+        config: { basemap: { lightPreset: "dusk" } },
+      });
+    } catch {
+      queueMicrotask(() => {
+        if (!disposed)
+          setError(
+            "Interactive maps are unavailable in this browser. Your itinerary is still available below.",
+          );
+      });
+      return;
+    }
+    map.current = currentMap;
+    currentMap.addControl(new mapboxgl.NavigationControl(), "bottom-right");
+    currentMap.on("error", () => {
+      if (!disposed)
+        setError(
+          "Map could not load. Check your connection and Mapbox token. Your itinerary is still available.",
+        );
     });
-
-    map.current.addControl(
-      new mapboxgl.NavigationControl(),
-      "bottom-right",
-    );
-
-    map.current.on("load", () => {
-      const currentMap = map.current;
-
-      if (!currentMap) return;
-
-      // Build route coordinates from the deduplicated chronological destination list
-      const routeCoordinates = allDestinations.map(d => d.coordinates);
-
-      currentMap.addSource("journey-route", {
-        type: "geojson",
-        data: {
-          type: "Feature",
-          properties: {},
-          geometry: {
-            type: "LineString",
-            coordinates: routeCoordinates,
-          },
-        },
-      });
-
-      currentMap.addLayer({
-        id: "journey-route-line",
-        type: "line",
-        source: "journey-route",
-        layout: {
-          "line-join": "round",
-          "line-cap": "round",
-        },
-        paint: {
-          "line-color": "#292524",
-          "line-width": 4,
-          "line-opacity": 0,
-        },
-      });
-
+    currentMap.on("load", () => {
+      if (disposed) return;
+      setError("");
+      const coordinates = trip.legs.flatMap((l) => l.route.coordinates);
       currentMap.addSource("journey-route-reveal", {
         type: "geojson",
         data: {
@@ -207,325 +195,216 @@ export default function JourneyMap() {
           properties: {},
           geometry: {
             type: "LineString",
-            coordinates: routeCoordinates.length > 0 ? [routeCoordinates[0], routeCoordinates[0]] : [],
+            coordinates: [coordinates[0], coordinates[0]],
           },
         },
       });
-
       currentMap.addLayer({
         id: "journey-route-line-reveal",
         type: "line",
         source: "journey-route-reveal",
-        layout: {
-          "line-join": "round",
-          "line-cap": "round",
-        },
+        layout: { "line-join": "round", "line-cap": "round" },
         paint: {
-          "line-color": "#292524",
+          "line-color": "#e9b17b",
           "line-width": 4,
-          "line-opacity": 0.85,
+          "line-opacity": 0.9,
         },
       });
-
-      // --- NEW: per-leg source + interaction layers ---
-      const legsFeatureCollection = {
-        type: 'FeatureCollection',
-        features: journey.legs.map((leg) => ({
-          type: 'Feature',
-          id: leg.id,
-          properties: {
+      currentMap.addSource("legs", {
+        type: "geojson",
+        data: {
+          type: "FeatureCollection",
+          features: trip.legs.map((leg) => ({
+            type: "Feature",
             id: leg.id,
-            color: leg.color ?? '#292524',
-          },
-          geometry: leg.route,
-        })),
-      };
-
-      currentMap.addSource('legs', {
-        type: 'geojson',
-        data: legsFeatureCollection,
-      });
-      // diag: report legs source features count
-      try {
-        // legs source added
-      } catch (err) {
-        // ignore diagnostic helper failure
-      }
-
-      // visible leg layer using feature property color and feature-state for selection
-      currentMap.addLayer({
-        id: 'legs-line',
-        type: 'line',
-        source: 'legs',
-        layout: {
-          'line-join': 'round',
-          'line-cap': 'round',
-        },
-        paint: {
-          'line-color': ['get', 'color'],
-          'line-width': ['case', ['boolean', ['feature-state', 'selected'], false], 6, 3],
-          'line-opacity': ['case', ['boolean', ['feature-state', 'selected'], false], 1.0, 0.15],
-        },
-      }, 'journey-route-line-reveal');
-
-      // invisible, wider hit layer on top for comfortable taps/clicks
-      currentMap.addLayer({
-        id: 'legs-hit',
-        type: 'line',
-        source: 'legs',
-        layout: {
-          'line-join': 'round',
-          'line-cap': 'round',
-        },
-        paint: {
-          'line-color': '#000000',
-          // keep visually transparent but avoid fully zero opacity to ensure hit-testing/reporting
-          'line-opacity': 0,
-          'line-width': 28,
+            properties: { id: leg.id },
+            geometry: {
+              type: "LineString",
+              coordinates: leg.route.coordinates,
+            },
+          })),
         },
       });
-      try {
-        // layer presence check (diagnostic removed)
-        const _ = !!currentMap.getLayer('legs-line');
-        const __ = !!currentMap.getLayer('legs-hit');
-      } catch (err) {
-        // ignore diagnostics
-      }
-
-      // create markers for the deduplicated destination list
-      allDestinations.forEach((location, index) => {
-        const marker = new mapboxgl.Marker({
-          element: createJourneyMarker(index === 0),
-        })
-          .setLngLat(location.coordinates)
-          .setPopup(
-            new mapboxgl.Popup({ offset: 25 }).setHTML(`
-              <div style="padding: 4px;">
-                <strong>${location.name}</strong>
-                <p style="margin: 4px 0 0;">
-                  ${location.state}
-                </p>
-                <p style="margin: 4px 0 0;">
-                  ${location.date}
-                </p>
-                <p style="margin: 4px 0 0;">
-                  ${location.description}
-                </p>
-              </div>
-            `),
-          )
+      currentMap.addLayer({
+        id: "legs-line",
+        type: "line",
+        source: "legs",
+        layout: { "line-join": "round", "line-cap": "round" },
+        paint: {
+          "line-color": "#f5d6ae",
+          "line-width": [
+            "case",
+            ["boolean", ["feature-state", "selected"], false],
+            7,
+            3,
+          ],
+          "line-opacity": [
+            "case",
+            ["boolean", ["feature-state", "selected"], false],
+            1,
+            0.12,
+          ],
+        },
+      });
+      currentMap.addLayer({
+        id: "legs-hit",
+        type: "line",
+        source: "legs",
+        paint: { "line-width": 32, "line-opacity": 0 },
+      });
+      // One owner per gesture: the same wide layer handles selection and empty-map deselection.
+      currentMap.on("click", (e) => {
+        const feature = currentMap.queryRenderedFeatures(e.point, {
+          layers: ["legs-hit"],
+        })[0] as unknown as Feature<LineString> | undefined;
+        setSelectedLegId(
+          feature ? String(feature.properties?.id ?? feature.id) : null,
+        );
+      });
+      currentMap.on("mouseenter", "legs-hit", () => {
+        currentMap.getCanvas().style.cursor = "pointer";
+      });
+      currentMap.on("mouseleave", "legs-hit", () => {
+        currentMap.getCanvas().style.cursor = "";
+      });
+      all.forEach((destination, index) => {
+        const element = createJourneyMarker(index === 0);
+        element.setAttribute("role", "button");
+        element.setAttribute("tabindex", "0");
+        element.setAttribute("aria-label", "Explore " + destination.name);
+        const select = () => callbacks.current?.(destination.id);
+        element.addEventListener("click", (e) => {
+          e.stopPropagation();
+          select();
+        });
+        element.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            select();
+          }
+        });
+        new mapboxgl.Marker({ element })
+          .setLngLat(destination.coordinates)
           .addTo(currentMap);
-
-        if (index === 0) {
-          marker.togglePopup();
-        }
       });
-
-      const bounds = new mapboxgl.LngLatBounds();
-
-      allDestinations.forEach((location) => {
-        bounds.extend(location.coordinates);
+      currentMap.fitBounds(boundsFor(coordinates), {
+        padding: 55,
+        duration: 1000,
       });
-
-      const globalBoundsArray = [[bounds.getWest(), bounds.getSouth()], [bounds.getEast(), bounds.getNorth()]] as [[number, number],[number, number]];
-      globalBoundsRef.current = globalBoundsArray;
-      // initial global bounds stored
-      currentMap.fitBounds(bounds, {
-        padding: 80,
-        duration: 1500,
-      });
-
-      const revealSource = currentMap.getSource(
+      const source = currentMap.getSource(
         "journey-route-reveal",
       ) as mapboxgl.GeoJSONSource;
-
-      const animationDuration = 2600;
-      const animationStart = performance.now();
-
-      const animateReveal = (timestamp: number) => {
-        const elapsed = timestamp - animationStart;
-        const rawProgress = Math.min(elapsed / animationDuration, 1);
-        const easedProgress = 1 - (1 - rawProgress) ** 3;
-        const partialRoute = buildRevealedRoute(routeCoordinates, easedProgress);
-
-        revealSource.setData(partialRoute);
-
-        if (rawProgress < 1) {
-          animationFrameRef.current = window.requestAnimationFrame(animateReveal);
-        }
+      const start = performance.now();
+      const reduced = window.matchMedia(
+        "(prefers-reduced-motion: reduce)",
+      ).matches;
+      const reveal = (timestamp: number) => {
+        if (disposed) return;
+        const progress = reduced ? 1 : Math.min((timestamp - start) / 2600, 1);
+        source.setData(
+          buildRevealedRoute(
+            coordinates,
+            1 - (1 - progress) ** 3,
+          ) as Feature<LineString>,
+        );
+        if (progress < 1)
+          animationFrameRef.current = requestAnimationFrame(reveal);
       };
-
-      // --- interaction handlers: leg taps and background taps ---
-      const onLegClick = (e: any) => {
-        try { e.originalEvent.stopPropagation(); } catch (err) { /* ignore */ }
-        const feature = e.features && e.features[0];
-        if (!feature) return;
-        // robustly extract id: prefer properties.id, fall back to feature.id
-        const propId = (feature as any).properties && (feature as any).properties.id;
-        const topId = (feature as any).id;
-        const clickedId = propId ?? topId ?? null;
-        if (!clickedId) {
-          return;
-        }
-        const clickedIdStr = String(clickedId);
-        // update current selected ref immediately so background handlers see the change during this event loop
-        currentSelectedRef.current = clickedIdStr;
-        // toggle selection if same leg clicked again
-        setSelectedLegId((prev) => (prev === clickedIdStr ? null : clickedIdStr));
-      };
-
-      const onMapClick = (e: any) => {
-        try {
-// Use a narrow test against the visible 'legs-line' to decide empty-map clicks.
-const hitPointLineFeatures = currentMap.queryRenderedFeatures(e.point, { layers: ['legs-line'] }) || [];
-// small bbox tolerance in case point falls exactly between pixels — 2px radius
-const bbox = [[e.point.x - 2, e.point.y - 2], [e.point.x + 2, e.point.y + 2]];
-const bboxLineFeatures = currentMap.queryRenderedFeatures(bbox as any, { layers: ['legs-line'] }) || [];
-
-// still compute the wide hit-layer counts for diagnostics if needed but do NOT use them for deselection
-const hitLayerFeaturesPoint = currentMap.queryRenderedFeatures(e.point, { layers: ['legs-hit'] }) || [];
-const hitLayerFeaturesBBox = currentMap.queryRenderedFeatures(bbox as any, { layers: ['legs-hit'] }) || [];
-
-const isCanvasTarget = e.originalEvent && currentMap.getCanvas && e.originalEvent.target === currentMap.getCanvas();
-
-const hitVisibleLine = (hitPointLineFeatures.length > 0) || (bboxLineFeatures.length > 0);
-if (!hitVisibleLine) {
-  // log current selection state immediately before changing it (kept for post-deploy audit)
-  // deselect because the visible line was not hit
-  setSelectedLegId(null);
-} else {
-  // near the route — do not deselect
-}
-        } catch (err) {
-        console.error('onMapClick error', err);
-        }
-      };
-
-      // store handlers for cleanup and use them for registration so we can remove them later
-      legClickRef.current = onLegClick;
-      mapClickRef.current = onMapClick;
-      currentMap.on('click', 'legs-hit', onLegClick);
-      currentMap.on('click', onMapClick);
-      animationFrameRef.current = window.requestAnimationFrame(animateReveal);
+      animationFrameRef.current = requestAnimationFrame(reveal);
+      setReady(true);
     });
-
     return () => {
-      if (animationFrameRef.current) {
-        window.cancelAnimationFrame(animationFrameRef.current);
-      }
-      // remove map and event handlers if present - use stored references
-      if (map.current) {
-        try {
-          if (legClickRef.current) {
-            map.current.off('click', 'legs-hit', legClickRef.current);
-          }
-          if (mapClickRef.current) {
-            map.current.off('click', mapClickRef.current);
-          }
-        } catch (err) {
-          console.warn('error during handler cleanup', err);
-        }
-      }
-      map.current?.remove();
+      disposed = true;
+      if (animationFrameRef.current)
+        cancelAnimationFrame(animationFrameRef.current);
+      currentMap.remove();
       map.current = null;
     };
-  }, []);
+  }, [trip]);
 
-  // effect: respond to selectedLegId changes by updating feature-state and camera
   useEffect(() => {
-    const currentMap = map.current;
-    if (!currentMap) return;
-    const prevId = prevSelectedRef.current;
-    const newId = selectedLegId;
-    // clear previous selection state
-    if (prevId) {
-      try {
-currentMap.setFeatureState({ source: 'legs', id: prevId }, { selected: false });
-      } catch (err) {
-console.error('setFeatureState(prev) error', err);
-      }
+    const m = map.current;
+    if (!ready || !m?.getLayer("legs-line")) return;
+    if (prevSelectedRef.current)
+      m.setFeatureState(
+        { source: "legs", id: prevSelectedRef.current },
+        { selected: false },
+      );
+    if (selectedLegId) {
+      m.setFeatureState(
+        { source: "legs", id: selectedLegId },
+        { selected: true },
+      );
+      const leg = trip.legs.find((l) => l.id === selectedLegId);
+      if (leg)
+        m.fitBounds(boundsFor(leg.route.coordinates), {
+          padding: 65,
+          maxZoom: 11,
+          duration: 900,
+        });
+    } else if (prevSelectedRef.current) {
+      m.fitBounds(boundsFor(trip.legs.flatMap((l) => l.route.coordinates)), {
+        padding: 55,
+        duration: 900,
+        pitch: 0,
+        bearing: 0,
+      });
     }
-    if (newId) {
-      try {
-currentMap.setFeatureState({ source: 'legs', id: newId }, { selected: true });
-} catch (err) {
-console.error('[diag] setFeatureState(new) error', err);
-      }
-      // Move legs-line above reveal so selected color is visible
-      try {
-currentMap.moveLayer('legs-line');
-currentMap.moveLayer('legs-line');
-} catch (err) {
-console.warn('moveLayer(legs-line) failed', err);
-}      // find the leg and compute bounds for fitBounds camera transition
-      const leg = journey.legs.find((l) => l.id === newId);
-      if (leg && leg.route && leg.route.coordinates && leg.route.coordinates.length > 0) {
-const legBounds = new mapboxgl.LngLatBounds(leg.route.coordinates[0], leg.route.coordinates[0]);
-for (const c of leg.route.coordinates) {
-  legBounds.extend(c as [number, number]);
-}        // cinematic transition with reserved bottom padding ~140px
-currentMap.fitBounds(legBounds, {
-  padding: { top: 100, bottom: 140, left: 40, right: 40 },
-  duration: 900,
-  easing: (t) => 1 - Math.pow(1 - t, 3),
-});
-const onFocusMoveEnd = () => {
-  currentMap.off('moveend', onFocusMoveEnd);
-};
-currentMap.on('moveend', onFocusMoveEnd);
-      }
-    } else {
-      // deselect: return camera to overall journey bounds
-      try {
-      // move legs-line back below the reveal so initial cinematic reveal remains unchanged
-      currentMap.moveLayer('legs-line', 'journey-route-line-reveal');
-      } catch (err) {
-      console.warn('moveLayer(legs-line, journey-route-line-reveal) failed', err);
-      }      // deselect: return camera to overall journey bounds
-      if (globalBoundsRef.current) {
-try {
-  currentMap.fitBounds(globalBoundsRef.current, {
-    padding: 80,
-    duration: 900,
-    easing: (t) => 1 - Math.pow(1 - t, 3),
-  });
-  const onReturnMoveEnd = () => {
-    currentMap.off('moveend', onReturnMoveEnd);
-  };
-  currentMap.on('moveend', onReturnMoveEnd);
-} catch (err) {
-  console.error('return-to-global fitBounds error', err);
-}
-      } else {
-console.warn('return-to-global: no globalBoundsRef present, attempting to recompute');
-try {
-  // recompute from journey legs as a safe fallback
-  const b = new mapboxgl.LngLatBounds();
-  for (const leg of journey.legs) {
-    for (const c of leg.route.coordinates) {
-      b.extend(c as [number, number]);
-    }
-  }
-  const recomputed = [[b.getWest(), b.getSouth()], [b.getEast(), b.getNorth()]] as [[number, number],[number, number]];
-  globalBoundsRef.current = recomputed;
-  currentMap.fitBounds(b, {
-    padding: 80,
-    duration: 900,
-    easing: (t) => 1 - Math.pow(1 - t, 3),
-  });
-  const onReturnMoveEnd2 = () => {
-    currentMap.off('moveend', onReturnMoveEnd2);
-  };
-  currentMap.on('moveend', onReturnMoveEnd2);
-} catch (err) {
-  console.error('return-to-global recompute error', err);
-}
-      }
-    }
-    currentSelectedRef.current = newId;
-    prevSelectedRef.current = newId;
-  }, [selectedLegId]);
+    prevSelectedRef.current = selectedLegId;
+  }, [selectedLegId, ready, trip]);
 
+  useEffect(() => {
+    const destination = trip.legs
+      .flatMap((l) => l.destinations)
+      .find((d) => d.id === focusId);
+    if (ready && destination)
+      map.current?.flyTo({
+        center: destination.coordinates,
+        zoom: 11.5,
+        pitch: 45,
+        duration: 1300,
+      });
+  }, [focusId, ready, trip]);
 
-  return <div ref={mapContainer} className="h-full w-full" />;
+  return (
+    <div className="map-wrap">
+      <div ref={mapContainer} className="map-canvas" />
+      {(!mapboxgl.accessToken || error) && (
+        <div className="map-fallback">
+          <span className="eyebrow">THE ROAD AHEAD</span>
+          <h2>
+            {destinations[0]?.name} to {destinations.at(-1)?.name}
+          </h2>
+          <p>
+            {error ||
+              "Add a Mapbox public token in your server environment to explore the interactive map."}
+          </p>
+          <p>The itinerary and your memories are available below.</p>
+        </div>
+      )}
+      <div className="map-caption">
+        <span className="live-dot" /> YOUR JOURNEY{" "}
+        <span>Tap a route or a stop to explore</span>
+      </div>
+      {ready && (
+        <button
+          className="map-reset"
+          onClick={() => {
+            setSelectedLegId(null);
+            map.current?.fitBounds(
+              boundsFor(trip.legs.flatMap((l) => l.route.coordinates)),
+              { padding: 55, pitch: 0, bearing: 0, duration: 900 },
+            );
+          }}
+        >
+          ↗ Full journey
+        </button>
+      )}
+      <div className="map-note">
+        {selectedLegId
+          ? trip.legs.find((l) => l.id === selectedLegId)?.title
+          : "Itinerary connections · not driving directions"}
+      </div>
+    </div>
+  );
 }
